@@ -12,6 +12,7 @@ import pytest
 from assembly_mcp.server import (
     dwg_to_geomap,
     find_products,
+    upload_artifact,
     issue_draft,
     product_catalogue,
     upload_issue,
@@ -316,3 +317,22 @@ def test_find_products_asks_the_cli_to_search(tmp_path: Path, monkeypatch: pytes
     monkeypatch.setenv("ASSEMBLY_APP_DIR", str(_stub_cli(tmp_path, "upload-product.ts", ECHO)))
     out = find_products("stiebel hsbc", organisation="Assembly", uploader_email="a@x.nz")
     assert out["argv"] == ["--as", "a@x.nz", "--find", "stiebel hsbc", "--org", "Assembly", "--env", "prod"]
+
+
+@needs_node
+def test_upload_artifact_passes_inputs_as_flags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ASSEMBLY_APP_DIR", str(_stub_cli(tmp_path, "upload-artifact.ts", ECHO)))
+    d = tmp_path / "whare-kea"
+    d.mkdir()
+    (d / "index.html").write_text("<html></html>")
+    out = upload_artifact(
+        "2610", str(d), title="Whare Kea Visibility", description="Viewshed",
+        source_url="https://claude.ai/artifact/abc", env="dev", dry_run=True, uploader_email="a@x.nz",
+    )
+    assert out["argv"] == [
+        "--as", "a@x.nz", "--project", "2610", "--dir", str(d.resolve()),
+        "--title", "Whare Kea Visibility", "--description", "Viewshed",
+        "--source-url", "https://claude.ai/artifact/abc", "--env", "dev", "--dry-run",
+    ]
+    out = upload_artifact("2610", str(d), entry="study.html", uploader_email="a@x.nz")
+    assert out["argv"] == ["--as", "a@x.nz", "--project", "2610", "--dir", str(d.resolve()), "--entry", "study.html", "--env", "prod"]

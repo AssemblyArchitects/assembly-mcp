@@ -423,6 +423,56 @@ def upload_renders(
 
 
 @mcp.tool()
+def upload_artifact(
+    project: str,
+    folder: str,
+    title: str | None = None,
+    description: str | None = None,
+    source_url: str | None = None,
+    entry: str = "index.html",
+    env: str = "prod",
+    dry_run: bool = False,
+    uploader_email: str | None = None,
+) -> dict:
+    """Put an interactive HTML artifact (e.g. a claude.ai artifact saved to a folder) on an
+    assembly-app project's Artifacts tab, as the person uploading.
+
+    The folder is uploaded as-is (the page refers to its files by relative path) and opened in the
+    app in a sandboxed frame. Re-uploading with the same `source_url` on the same project REPLACES
+    that artifact's files and keeps its link, so a link already sent to a client keeps working.
+
+    Args:
+        project: The project's number (e.g. "2610"), UUID or name.
+        folder: Local folder holding the artifact's entry page and its supporting files.
+        title: Name shown on the Artifacts tab (default: the entry file's name).
+        description: One line under the title (optional).
+        source_url: The claude.ai artifact link it came from — the key for replacing it later.
+        entry: The page to open, relative to the folder (default "index.html").
+        env: "prod" (app.assembly.nz, default) or "dev" (dev.assembly.nz).
+        dry_run: Show the plan only (files, size, create vs replace); no writes.
+        uploader_email: Who is uploading — omit to use the saved default (see `saved_login`).
+
+    Returns:
+        {ok, uploader, project, mode: "create"|"replace", fileCount, sizeBytes,
+         files (dry run) | artifact + viewUrl (the link anyone can open)}
+    """
+    who = _resolve_uploader(uploader_email)
+    args = ["--as", who, "--project", project, "--dir", str(Path(folder).expanduser().resolve())]
+    if title:
+        args += ["--title", title]
+    if description is not None:
+        args += ["--description", description]
+    if source_url:
+        args += ["--source-url", source_url]
+    if entry != "index.html":
+        args += ["--entry", entry]
+    args += _env_arg(env)
+    if dry_run:
+        args.append("--dry-run")
+    return _run_upload_cli("upload-artifact.ts", args, _uploader_env(who))
+
+
+@mcp.tool()
 def dwg_to_geomap(
     project: str,
     file: str,
