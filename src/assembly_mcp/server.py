@@ -165,11 +165,11 @@ def _run_upload_cli(script_name: str, args: list[str], child_env: dict[str, str]
     """Run an assembly-app upload CLI (`apps/frontend/scripts/<script_name>`) and return its
     `RESULT {json}` line. The CLI signs in AS the person (`--as <email>`); its password comes from
     ASSEMBLY_PASSWORD or ~/.assembly/credentials.json — never from a tool argument. Runs the bundled
-    CLI (no checkout needed); dev config is read from a checkout's `apps/frontend/.env.local`."""
+    CLI (no checkout needed). Dev config comes from ASSEMBLY_DEV_SUPABASE_* (see `_dev_cli_env`)."""
     cmd, cwd = _cli_command(script_name.removesuffix(".ts"))
     proc = subprocess.run(
         [*cmd, *args],
-        cwd=cwd, env=child_env, capture_output=True, text=True, timeout=1800,
+        cwd=cwd, env=_dev_cli_env(child_env if child_env is not None else dict(os.environ)), capture_output=True, text=True, timeout=1800,
         encoding="utf-8", errors="replace",
     )
     result_lines = [ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT ")]
@@ -226,15 +226,29 @@ def _resolve_uploader(uploader_email: str | None) -> str:
     raise RuntimeError("no saved login — ask for the person's app email + password once and call save_login")
 
 
+def _dev_cli_env(child: dict[str, str]) -> dict[str, str]:
+    """The CLIs read dev config as VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY. When the MCP server has
+    ASSEMBLY_DEV_SUPABASE_URL / ASSEMBLY_DEV_SUPABASE_ANON_KEY (set by the P: installer), hand them over
+    under those names, so `env="dev"` needs no assembly-app checkout either. Real env beats an
+    `--env-file`, so these also win over a checkout's `.env.local`."""
+    url, key = os.environ.get("ASSEMBLY_DEV_SUPABASE_URL"), os.environ.get("ASSEMBLY_DEV_SUPABASE_ANON_KEY")
+    if url and key:
+        child = {**child, "VITE_SUPABASE_URL": url, "VITE_SUPABASE_ANON_KEY": key}
+    return child
+
+
 def _supabase_config(env: str) -> tuple[str, str]:
     """(url, anon key) the CLIs would use: prod from ASSEMBLY_SUPABASE_* (URL defaults to
-    newapi-next), dev from the checkout's apps/frontend/.env.local."""
+    newapi-next), dev from ASSEMBLY_DEV_SUPABASE_*, else a checkout's apps/frontend/.env.local."""
     if env == "prod":
         url = os.environ.get("ASSEMBLY_SUPABASE_URL", "https://newapi-next.assembly.nz")
         key = os.environ.get("ASSEMBLY_SUPABASE_ANON_KEY") or os.environ.get("ASSEMBLY_PROD_ANON_KEY")
         if not key:
             raise RuntimeError("ASSEMBLY_SUPABASE_ANON_KEY is not set for the assembly MCP server")
         return url, key
+    dev_url, dev_key = os.environ.get("ASSEMBLY_DEV_SUPABASE_URL"), os.environ.get("ASSEMBLY_DEV_SUPABASE_ANON_KEY")
+    if dev_url and dev_key:
+        return dev_url, dev_key
     vals: dict[str, str] = {}
     env_file = _app_dir() / "apps" / "frontend" / ".env.local"
     try:
@@ -246,7 +260,10 @@ def _supabase_config(env: str) -> tuple[str, str]:
         pass
     url, key = vals.get("VITE_SUPABASE_URL"), vals.get("VITE_SUPABASE_ANON_KEY")
     if not url or not key:
-        raise RuntimeError(f"dev config not found in {env_file}")
+        raise RuntimeError(
+            f"dev config not found: set ASSEMBLY_DEV_SUPABASE_URL + ASSEMBLY_DEV_SUPABASE_ANON_KEY (the P: "
+            f"installer does) or have an assembly-app checkout with {env_file}"
+        )
     return url, key
 
 
