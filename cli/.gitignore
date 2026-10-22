@@ -1,0 +1,3 @@
+node_modules/
+# Bundles of the private assembly-app CLIs: never push to this public repo. They reach P: via push-to-p.sh.
+bin/

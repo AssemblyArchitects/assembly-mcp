@@ -40,6 +40,35 @@ def _app_dir() -> Path:
     return Path(env) if env else Path(__file__).resolve().parents[3] / "assembly-app"
 
 
+def _cli_dir() -> Path:
+    """Where the self-contained CLI bundles live (`cli/bin/*.mjs`, built by `cli/build.mjs`; env
+    ASSEMBLY_CLI_DIR overrides). With these present no assembly-app checkout is needed."""
+    env = os.environ.get("ASSEMBLY_CLI_DIR")
+    return Path(env) if env else Path(__file__).resolve().parents[2] / "cli" / "bin"
+
+
+def _cli_command(name: str) -> tuple[list[str], Path]:
+    """(node argv prefix, cwd) to run the assembly-app CLI `name` (e.g. "upload-issues"): the bundled
+    `<name>.mjs` when present, else `apps/frontend/scripts/<name>.ts` in an assembly-app checkout.
+    A checkout's `apps/frontend/.env.local` is still loaded when one exists (for --env dev)."""
+    node = shutil.which("node")
+    if node is None:
+        raise FileNotFoundError("node (>=22) not found on PATH — required for the assembly-app CLIs")
+    frontend = _app_dir() / "apps" / "frontend"
+    env_file = frontend / ".env.local"
+    env_args = [f"--env-file-if-exists={env_file}"] if env_file.exists() else []
+    bundled = _cli_dir() / f"{name}.mjs"
+    if bundled.exists():
+        return [node, *env_args, "--no-warnings", str(bundled)], bundled.parent
+    script = frontend / "scripts" / f"{name}.ts"
+    if script.exists():
+        return [node, *env_args, "--experimental-strip-types", "--no-warnings", str(script)], frontend
+    raise FileNotFoundError(
+        f"{name} not found: no bundle at {bundled} (run `npm ci && npm run build` in cli/) and no "
+        f"{script} — set ASSEMBLY_APP_DIR to an assembly-app checkout that has it"
+    )
+
+
 @mcp.tool()
 def convert_pdftomd(
     pdf_path: str,
@@ -66,16 +95,11 @@ def convert_pdftomd(
     Returns:
         The converted Markdown as a string, prefixed with a summary comment.
     """
-    script = _app_dir() / "apps" / "frontend" / "scripts" / "pdf2md.ts"
-    if not script.exists():
-        raise FileNotFoundError(f"pdf2md CLI not found at {script} — set ASSEMBLY_APP_DIR to the assembly-app checkout")
-    node = shutil.which("node")
-    if node is None:
-        raise FileNotFoundError("node (>=22) not found on PATH — required for the pdf2md converter")
+    cmd, cwd = _cli_command("pdf2md")
     out = Path(output_path) if output_path else Path(tempfile.mkdtemp(prefix="pdf2md-")) / (Path(pdf_path).stem + ".md")
     proc = subprocess.run(
-        [node, "--experimental-strip-types", "--no-warnings", str(script), str(Path(pdf_path).resolve()), str(out.resolve())],
-        cwd=script.parents[1], capture_output=True, text=True, timeout=600,
+        [*cmd, str(Path(pdf_path).resolve()), str(out.resolve())],
+        cwd=cwd, capture_output=True, text=True, timeout=600,
         encoding="utf-8", errors="replace",
     )
     if proc.returncode != 0:
@@ -140,18 +164,12 @@ def convert_mdtopdf(
 def _run_upload_cli(script_name: str, args: list[str], child_env: dict[str, str] | None = None) -> dict:
     """Run an assembly-app upload CLI (`apps/frontend/scripts/<script_name>`) and return its
     `RESULT {json}` line. The CLI signs in AS the person (`--as <email>`); its password comes from
-    ASSEMBLY_PASSWORD or ~/.assembly/credentials.json — never from a tool argument. Dev config is
-    read from the checkout's `apps/frontend/.env.local`."""
-    frontend = _app_dir() / "apps" / "frontend"
-    script = frontend / "scripts" / script_name
-    if not script.exists():
-        raise FileNotFoundError(f"{script_name} not found at {script} — set ASSEMBLY_APP_DIR to an assembly-app checkout that has it")
-    node = shutil.which("node")
-    if node is None:
-        raise FileNotFoundError("node (>=22) not found on PATH — required for the upload CLIs")
+    ASSEMBLY_PASSWORD or ~/.assembly/credentials.json — never from a tool argument. Runs the bundled
+    CLI (no checkout needed); dev config is read from a checkout's `apps/frontend/.env.local`."""
+    cmd, cwd = _cli_command(script_name.removesuffix(".ts"))
     proc = subprocess.run(
-        [node, "--env-file-if-exists=.env.local", "--experimental-strip-types", "--no-warnings", str(script), *args],
-        cwd=frontend, env=child_env, capture_output=True, text=True, timeout=1800,
+        [*cmd, *args],
+        cwd=cwd, env=child_env, capture_output=True, text=True, timeout=1800,
         encoding="utf-8", errors="replace",
     )
     result_lines = [ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT ")]

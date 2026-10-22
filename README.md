@@ -12,11 +12,10 @@ tools:
 | **`upload_renders`** | images → Renders tab | assembly-app `upload-renders` CLI |
 | **`dwg_to_geomap`** | Revit DWG → lines on Site → Revit Maps | assembly-app `upload-dwg-geomap` CLI (DWG converted by civil-map-service) |
 
-`convert_pdftomd` is a thin wrapper — it shells out to
-`node --experimental-strip-types --no-warnings <assembly-app>/apps/frontend/scripts/pdf2md.ts`,
-the assembly-app pdf2md converter (pdf.js: headings, lists, ruled tables,
-images saved to `<stem>_images/`). Requires **Node ≥ 22** and an assembly-app
-checkout — see `ASSEMBLY_APP_DIR` below. `convert_mdtopdf` renders
+`convert_pdftomd` and the upload tools run the assembly-app CLIs from **self-contained bundles in
+`cli/bin/*.mjs`** (built by `cli/build.mjs`), so **no assembly-app checkout is needed** to use them —
+just Node ≥ 22. The bundles talk straight to the app's server (Supabase at `newapi-next.assembly.nz`)
+as the signed-in person. See [Building the CLI bundles](#building-the-cli-bundles). `convert_mdtopdf` renders
 Markdown/HTML → PDF with WeasyPrint (pure-Python, no TeX toolchain).
 
 ---
@@ -25,10 +24,11 @@ Markdown/HTML → PDF with WeasyPrint (pure-Python, no TeX toolchain).
 
 - **Python ≥ 3.11**
 - **[uv](https://docs.astral.sh/uv/)** (recommended) or `pip`
-- **Node ≥ 22** and an **assembly-app checkout** — required for `convert_pdftomd`,
-  which shells out to that repo's `apps/frontend/scripts/pdf2md.ts`. By default
-  it looks for a sibling `assembly-app` checkout next to this repo; point it
-  elsewhere with the `ASSEMBLY_APP_DIR` environment variable.
+- **Node ≥ 22** — runs the bundled CLIs in `cli/bin/`. `convert_pdftomd` also needs
+  `cd cli && npm ci --omit=dev` once (pdf.js + the native canvas module).
+- An **assembly-app checkout is optional**: only used when a bundle is missing (falls back to
+  `<ASSEMBLY_APP_DIR>/apps/frontend/scripts/<name>.ts`) and for `env="dev"` config (its
+  `apps/frontend/.env.local`).
 - **WeasyPrint native libraries** — only needed for `convert_mdtopdf`
   (`convert_pdftomd` works without them):
   - **Linux (Debian/Ubuntu):** `apt install libpango-1.0-0 libpangoft2-1.0-0 libgdk-pixbuf-2.0-0 libffi-dev`
@@ -107,8 +107,7 @@ Restart Claude Desktop. The tools appear under the 🔌 tools menu.
 
 Convert a PDF file to Markdown. PDF→Markdown runs the assembly-app pdf2md
 converter (pdf.js) — headings, lists, ruled tables, images (saved to
-`<stem>_images/`). Requires node ≥ 22 and the assembly-app checkout
-(`ASSEMBLY_APP_DIR`).
+`<stem>_images/`). Requires node ≥ 22 and `cli/` installed (`npm ci --omit=dev`).
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
@@ -142,8 +141,8 @@ blocks, page numbers) and verifies the PDF magic bytes before writing.
 ### `upload_issue` / `issue_draft` / `upload_renders` / `dwg_to_geomap`
 
 Upload to an assembly-app project **as the person doing it**. These are thin wrappers over the
-assembly-app CLIs `apps/frontend/scripts/upload-issues.ts`, `upload-renders.ts` and `upload-dwg-geomap.ts` (node ≥ 22 +
-an assembly-app checkout, `ASSEMBLY_APP_DIR`). Each signs in as `uploader_email`, so the database's own
+assembly-app CLIs `upload-issues`, `upload-renders` and `upload-dwg-geomap`, run from the bundles in
+`cli/bin/` (node ≥ 22; no checkout). Each signs in as `uploader_email`, so the database's own
 permission rules apply: people can only upload to projects they're on, and viewers and clients can't upload.
 The slash command `/upload issues` / `/upload renders` (`.claude/commands/upload.md`) drives them;
 `/dwgtogeomap` (`.claude/commands/dwgtogeomap.md`) drives `dwg_to_geomap`.
@@ -193,3 +192,20 @@ tests/            smoke tests
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+---
+
+## Building the CLI bundles
+
+`cli/bin/*.mjs` are esbuild bundles of the assembly-app operator CLIs (`upload-issues`, `upload-renders`,
+`upload-product`, `upload-dwg-geomap`, `upload-artifact`, `upload-panomap`, `pdf2md`). They are built
+from a private repo, so they are **gitignored here (this repo is public)** and reach the shared copy on
+P: through `push-to-p.sh`. Rebuild after the app's CLIs change (build from `main`, which is what prod runs):
+
+```bash
+cd cli
+npm ci
+ASSEMBLY_APP_DIR=<assembly-app checkout on main> npm run build   # writes bin/*.mjs + bin/SOURCE.json
+```
+
+`bin/SOURCE.json` records the app commit the bundles came from.
