@@ -336,3 +336,30 @@ def test_upload_artifact_passes_inputs_as_flags(tmp_path: Path, monkeypatch: pyt
     ]
     out = upload_artifact("2610", str(d), entry="study.html", uploader_email="a@x.nz")
     assert out["argv"] == ["--as", "a@x.nz", "--project", "2610", "--dir", str(d.resolve()), "--entry", "study.html", "--env", "prod"]
+
+
+@needs_node
+def test_bundled_cli_wins_over_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With a bundle in the CLI dir the checkout is never needed (or used)."""
+    bundles = tmp_path / "bin"
+    bundles.mkdir()
+    (bundles / "upload-renders.mjs").write_text(
+        "console.log('RESULT ' + JSON.stringify({ ok: true, from: 'bundle', argv: process.argv.slice(2) }));\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ASSEMBLY_CLI_DIR", str(bundles))
+    monkeypatch.setenv("ASSEMBLY_APP_DIR", str(_stub_cli(tmp_path / "app", "upload-renders.ts", ECHO)))
+    out = upload_renders("2610", [str(tmp_path)], uploader_email="a@x.nz")
+    assert out["from"] == "bundle"
+    assert out["argv"][:2] == ["--as", "a@x.nz"]
+
+
+@needs_node
+def test_bundled_cli_needs_no_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bundles = tmp_path / "bin"
+    bundles.mkdir()
+    (bundles / "upload-issues.mjs").write_text(ECHO, encoding="utf-8")
+    monkeypatch.setenv("ASSEMBLY_CLI_DIR", str(bundles))
+    monkeypatch.setenv("ASSEMBLY_APP_DIR", str(tmp_path / "no-such-checkout"))
+    out = upload_issue("2610", "For Consent", "Set 1", [str(tmp_path)], dry_run=True, uploader_email="a@x.nz")
+    assert out["ok"] is True

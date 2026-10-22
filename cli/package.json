@@ -1,0 +1,16 @@
+{
+  "name": "assembly-mcp-cli",
+  "private": true,
+  "type": "module",
+  "description": "Self-contained builds of the assembly-app operator CLIs (bin/*.mjs), so the MCP needs no assembly-app checkout. Rebuild with `npm run build` (needs ASSEMBLY_APP_DIR at build time only).",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "0.1.100",
+    "pdfjs-dist": "5.4.296"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.0"
+  }
+}
