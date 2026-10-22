@@ -363,3 +363,35 @@ def test_bundled_cli_needs_no_checkout(tmp_path: Path, monkeypatch: pytest.Monke
     monkeypatch.setenv("ASSEMBLY_APP_DIR", str(tmp_path / "no-such-checkout"))
     out = upload_issue("2610", "For Consent", "Set 1", [str(tmp_path)], dry_run=True, uploader_email="a@x.nz")
     assert out["ok"] is True
+
+
+SHOW_DEV_ENV = (
+    "console.log('RESULT ' + JSON.stringify({ ok: true, url: process.env.VITE_SUPABASE_URL ?? null, "
+    "key: process.env.VITE_SUPABASE_ANON_KEY ?? null }));\n"
+)
+
+
+@needs_node
+def test_dev_config_comes_from_mcp_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """env="dev" needs no checkout: ASSEMBLY_DEV_SUPABASE_* reach the CLI as VITE_SUPABASE_*."""
+    bundles = tmp_path / "bin"
+    bundles.mkdir()
+    (bundles / "upload-renders.mjs").write_text(SHOW_DEV_ENV, encoding="utf-8")
+    monkeypatch.setenv("ASSEMBLY_CLI_DIR", str(bundles))
+    monkeypatch.setenv("ASSEMBLY_APP_DIR", str(tmp_path / "no-such-checkout"))
+    monkeypatch.setenv("ASSEMBLY_DEV_SUPABASE_URL", "https://api-dev.example")
+    monkeypatch.setenv("ASSEMBLY_DEV_SUPABASE_ANON_KEY", "dev-key")
+    out = upload_renders("2610", [str(tmp_path)], env="dev", uploader_email="a@x.nz")
+    assert (out["url"], out["key"]) == ("https://api-dev.example", "dev-key")
+
+
+def test_dev_supabase_config_prefers_mcp_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from assembly_mcp.server import _supabase_config
+
+    monkeypatch.setenv("ASSEMBLY_APP_DIR", str(tmp_path))
+    monkeypatch.setenv("ASSEMBLY_DEV_SUPABASE_URL", "https://api-dev.example")
+    monkeypatch.setenv("ASSEMBLY_DEV_SUPABASE_ANON_KEY", "dev-key")
+    assert _supabase_config("dev") == ("https://api-dev.example", "dev-key")
+    monkeypatch.delenv("ASSEMBLY_DEV_SUPABASE_URL")
+    with pytest.raises(RuntimeError, match="ASSEMBLY_DEV_SUPABASE_URL"):
+        _supabase_config("dev")
