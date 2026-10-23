@@ -387,6 +387,55 @@ def upload_issue(
 
 
 @mcp.tool()
+def list_drafts(project: str, env: str = "prod", uploader_email: str | None = None) -> dict:
+    """List a project's DRAFT issues (not yet issued) on its Documents tab, newest first — use it to
+    find the draft to add files to with `add_to_draft`.
+
+    Args:
+        project: The project's number (e.g. "2610") or UUID.
+        env: "prod" (default) or "dev".
+        uploader_email: Who is asking — omit to use the saved default.
+
+    Returns:
+        {ok, project: {id, name}, drafts: [{collectionId, name, createdAt, files}]}
+    """
+    who = _resolve_uploader(uploader_email)
+    args = ["--drafts", "--as", who, "--project", project, *_env_arg(env)]
+    return _run_upload_cli("upload-issues.ts", args, _uploader_env(who))
+
+
+@mcp.tool()
+def add_to_draft(
+    collection_id: str,
+    files: list[str],
+    env: str = "prod",
+    dry_run: bool = False,
+    uploader_email: str | None = None,
+) -> dict:
+    """Add files to an existing DRAFT issue (appended after its current files). Refuses anything
+    already issued — issued sets are a record and are never edited. Run with `dry_run=True` first.
+
+    Args:
+        collection_id: The draft's `collectionId` (from `upload_issue` or `list_drafts`).
+        files: File and/or folder paths (folders are walked).
+        env: "prod" (default) or "dev" — must match the draft's.
+        dry_run: Show the plan only; no writes.
+        uploader_email: Who is uploading — omit to use the saved default.
+
+    Returns:
+        {ok, project, collectionId, name, status: "draft", existingFiles, uploaded, failed}
+    """
+    who = _resolve_uploader(uploader_email)
+    args = ["--add-to", collection_id, "--as", who]
+    for f in files:
+        args += ["--file", str(Path(f).expanduser().resolve())]
+    args += _env_arg(env)
+    if dry_run:
+        args.append("--dry-run")
+    return _run_upload_cli("upload-issues.ts", args, _uploader_env(who))
+
+
+@mcp.tool()
 def issue_draft(
     collection_id: str,
     issue_type: str,

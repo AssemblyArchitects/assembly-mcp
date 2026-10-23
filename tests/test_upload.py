@@ -12,8 +12,10 @@ import pytest
 from assembly_mcp.server import (
     dwg_to_geomap,
     find_products,
+    add_to_draft,
     upload_artifact,
     issue_draft,
+    list_drafts,
     product_catalogue,
     upload_issue,
     upload_product,
@@ -55,6 +57,22 @@ def test_issue_draft_maps_recipients_and_notes(tmp_path: Path, monkeypatch: pyte
         "--issue", "c1", "--as", "a@x.nz", "--type", "review",
         "--to", "Jane Smith", "--to", "Acme", "--notes", "hi", "--env", "prod",
     ]
+
+
+@needs_node
+def test_add_to_draft_passes_inputs_as_flags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ASSEMBLY_APP_DIR", str(_stub_cli(tmp_path, "upload-issues.ts", ECHO)))
+    f = tmp_path / "a.png"
+    f.write_text("x")
+    out = add_to_draft("c1", [str(f)], dry_run=True, uploader_email="a@x.nz")
+    assert out["argv"] == ["--add-to", "c1", "--as", "a@x.nz", "--file", str(f.resolve()), "--env", "prod", "--dry-run"]
+
+
+@needs_node
+def test_list_drafts_passes_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ASSEMBLY_APP_DIR", str(_stub_cli(tmp_path, "upload-issues.ts", ECHO)))
+    out = list_drafts("2613", env="dev", uploader_email="a@x.nz")
+    assert out["argv"] == ["--drafts", "--as", "a@x.nz", "--project", "2613", "--env", "dev"]
 
 
 @needs_node
