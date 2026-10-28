@@ -698,7 +698,7 @@ def upload_product(
     dry_run: bool = False,
     uploader_email: str | None = None,
 ) -> dict:
-    """Add ONE product to the person's organisation product library — with its size / colour variants,
+    """Add ONE product to the person's organisation product library — with its size / colour / fabric variants,
     photos and spec-sheet PDFs — and optionally select it on a project. Signs in as the person (org
     admin/editor for the library; project admin/editor for a selection). For several products use
     `upload_products`.
@@ -721,8 +721,9 @@ def upload_product(
         product_type: A product type slug or name (see `product_catalogue`).
         attributes: Spec values keyed by the type's attribute keys.
         images: Photo file paths and/or http(s) image URLs; the first is the cover.
-        variants: Sizes / colours of this product: [{"size": "200 S"} or {"color": "Matte Black"} (one or
-            both), "model_code", "price", "price_note", "source_url", "images": [...]}].
+        variants: Sizes / colours / fabrics of this product: [{"size": "200 S"}, {"color": "Matte Black"}
+            and/or {"fabric": "Tahiti"} (any mix; fabric / upholstery is its own field, never in
+            "color"), "model_code", "price", "price_note", "source_url", "images": [...]}].
         spec_sheets: Spec-sheet / datasheet / manual PDFs — file paths and/or http(s) URLs.
         project: Also select it on this project — number (e.g. "2610"), name, or UUID.
         space: The project space (room) to put the selection in; created if new.
@@ -794,7 +795,7 @@ def upload_products(
     Args:
         products: One dict per product: {"model" (required), "manufacturer", "model_code", "website",
             "price", "price_note", "notes", "suppliers": [...], "category", "type", "attributes": {...},
-            "images": [...], "variants": [{"size" | "color", "model_code", "price", "price_note",
+            "images": [...], "variants": [{"size" | "color" | "fabric", "model_code", "price", "price_note",
             "source_url", "images": [...]}], "spec_sheets": [...], "selection": {"project", "space",
             "quantity", "location", "status", "notes"}, "existing_id", "update": "fill"|"overwrite"|"none"}.
             Local file paths are made absolute here. Don't list the same product twice — merge its
