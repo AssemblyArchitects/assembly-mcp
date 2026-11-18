@@ -413,3 +413,15 @@ def test_dev_supabase_config_prefers_mcp_env(monkeypatch: pytest.MonkeyPatch, tm
     monkeypatch.delenv("ASSEMBLY_DEV_SUPABASE_URL")
     with pytest.raises(RuntimeError, match="ASSEMBLY_DEV_SUPABASE_URL"):
         _supabase_config("dev")
+
+
+@needs_node
+def test_upload_renders_passes_each_tag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ASSEMBLY_APP_DIR", str(_stub_cli(tmp_path, "upload-renders.ts", ECHO)))
+    f = tmp_path / "site.jpg"
+    f.write_bytes(b"x")
+    out = upload_renders("2610", [str(f)], tags=["Photos", "Site visit"], dry_run=True, uploader_email="a@x.nz")
+    assert out["argv"] == [
+        "--as", "a@x.nz", "--project", "2610", "--file", str(f.resolve()),
+        "--tag", "Photos", "--tag", "Site visit", "--env", "prod", "--dry-run",
+    ]

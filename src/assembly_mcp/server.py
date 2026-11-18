@@ -5,7 +5,7 @@ Exposes these tools over stdio:
   * convert_mdtopdf — Markdown → PDF (WeasyPrint)
   * upload_issue / issue_draft — files → a draft issue on a project's Documents tab, then issue it
     (wraps the assembly-app upload-issues CLI)
-  * upload_renders — images → a project's Renders tab (wraps the assembly-app upload-renders CLI)
+  * upload_renders — photos / renders → a project's Images tab, tagged (wraps the assembly-app upload-renders CLI)
   * dwg_to_geomap — a Revit DWG → lines on a project's Site → Revit Maps tab (wraps the assembly-app
     upload-dwg-geomap CLI; the DWG is converted by civil-map-service)
   * product_catalogue / find_products / upload_product / upload_products — products (with variants,
@@ -473,31 +473,40 @@ def issue_draft(
 def upload_renders(
     project: str,
     files: list[str],
+    tags: list[str] | None = None,
     title: str | None = None,
     env: str = "prod",
     dry_run: bool = False,
     uploader_email: str | None = None,
 ) -> dict:
-    """Upload render images to an assembly-app project's Renders tab, as the person uploading.
+    """Upload photos / renders to an assembly-app project's Images tab (was "Renders"), tagged, as the
+    person uploading.
 
-    Non-images are skipped and reported; an image already on the Renders tab (same file name) is
-    skipped, so re-running is safe.
+    Non-images are skipped and reported (HEIC too — only Safari can show it; convert to JPEG first). An
+    image already on the tab (same file name) is not uploaded again; when `tags` are given it gets any
+    of them it lacks ADDED, so re-running with tags tags images that are already there.
 
     Args:
         project: The project's number (e.g. "2610") or UUID.
         files: Image and/or folder paths (folders are walked).
+        tags: Tags for every image — the built-ins "Photos" / "Renders", or any other name (≤ 40
+            characters), which makes a new tag on the project. Matching is case-insensitive and reuses
+            the project's spelling. Omit = ["Renders"].
         title: Name for the render — only when uploading exactly one image (default: file name).
         env: "prod" (app.assembly.nz, default) or "dev" (dev.assembly.nz).
         dry_run: Show the plan only; no writes.
         uploader_email: Who is uploading — omit to use the saved default (see `saved_login`).
 
     Returns:
-        {ok, uploader, project, uploaded | toUpload, alreadyThere, skippedNotImages, failed}
+        {ok, uploader, project, tags, uploaded | toUpload, alreadyThere, tagged | toTag,
+         skippedNotImages, failed}
     """
     who = _resolve_uploader(uploader_email)
     args = ["--as", who, "--project", project]
     for f in files:
         args += ["--file", str(Path(f).expanduser().resolve())]
+    for t in tags or []:
+        args += ["--tag", t]
     if title:
         args += ["--title", title]
     args += _env_arg(env)
