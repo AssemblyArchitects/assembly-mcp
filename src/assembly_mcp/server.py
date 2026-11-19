@@ -836,6 +836,70 @@ def upload_products(
     return _run_with_spec({"products": [_resolve_product_files(p) for p in products]}, who, args)
 
 
+@mcp.tool()
+def project_selections(project: str, env: str = "prod", uploader_email: str | None = None) -> dict:
+    """What a project's Selections page holds — every selected product with its selection id, space(s),
+    group(s), quantity, status, variant and notes. Call it before `edit_selections` (edits name
+    selections by these ids) and after `upload_products` to check where everything landed.
+
+    Args:
+        project: The project's number ("2610"), name or id.
+        env: "prod" (app.assembly.nz, default) or "dev".
+        uploader_email: Who is asking — omit to use the saved default (see `saved_login`).
+
+    Returns:
+        {project: {id, number, name, access}, spaces / groups / selections as the Selections page
+        shows them (the CLI's `--selections` shape; each selection carries its `id`).}
+    """
+    who = _resolve_uploader(uploader_email)
+    return _run_upload_cli("upload-product.ts", ["--as", who, "--selections", project, *_env_arg(env)], _uploader_env(who))
+
+
+@mcp.tool()
+def edit_selections(
+    project: str,
+    edits: list[dict],
+    env: str = "prod",
+    dry_run: bool = False,
+    uploader_email: str | None = None,
+) -> dict:
+    """Change a project's Selections page the way the page itself does — move selections between
+    spaces (rooms; "Lounge › Nook" for a sub-space), put them in / take them out of groups, change
+    quantity, status, notes, location, the picked variant, and the project's own price / discount /
+    supplier. Runs as the person (project admin or editor). Always `dry_run=True` first, show the plan,
+    and run for real only on their "yes". At most 100 edits per call.
+
+    Args:
+        project: The project's number ("2610"), name or id.
+        edits: Each one of
+            {"op": "update", "selection": "<id>", "quantity"?: n, "status"?: "proposed"|"approved"|"rejected"|"option",
+             "notes"?: "…", "location"?: "…", "variant"?: "<variant id or label, e.g. Aged Oak>",
+             "unit_price"?: n|null, "discount_pct"?: n|null, "supplier"?: "…"|null}
+            {"op": "add_to_space" | "move_to_space" | "remove_from_space", "selection": "<id>", "space": "<name or path>", "quantity"?: n}
+            {"op": "add_to_group" | "remove_from_group", "selection": "<id>", "group": "<name>", "quantity"?: n}
+            Selection ids come from `project_selections`. Spaces and groups are matched by name
+            (ignoring case); a new group is made, but a space must already exist (`upload_products`
+            with `selection.space` makes one).
+        env: "prod" (app.assembly.nz, default) or "dev".
+        dry_run: Plan every step and report it; no writes.
+        uploader_email: Who is editing — omit to use the saved default (see `saved_login`).
+
+    Returns:
+        Dry run: {ok, dryRun, project, plan: [step text]}. Real run: {ok, dryRun, project, done: [{text, ok,
+        error}], undo}.
+    """
+    if not edits:
+        raise ValueError("edit_selections needs at least one edit")
+    who = _resolve_uploader(uploader_email)
+    args = _env_arg(env)
+    if dry_run:
+        args.append("--dry-run")
+    with tempfile.TemporaryDirectory(prefix="edit-selections-") as tmp:
+        path = Path(tmp) / "edits.json"
+        path.write_text(json.dumps({"project": project, "edits": edits}), encoding="utf-8")
+        return _run_upload_cli("upload-product.ts", ["--as", who, "--edit-selections", str(path), *args], _uploader_env(who))
+
+
 def main() -> None:
     """Console-script entry point: run the MCP server over stdio."""
     mcp.run()
