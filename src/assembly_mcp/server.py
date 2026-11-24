@@ -1,6 +1,9 @@
 """Assembly MCP server.
 
 Exposes these tools over stdio:
+  * upload_documents — files / folders → a DRAFT issue on a project's Documents (Issued) tab, one call
+  * assembly_app / assembly_app_guide — read or change anything in the app as the signed-in person,
+    and the guide to it (wraps P:/assembly-app-skills/api/assembly-api.mjs, published from the app repo)
   * convert_pdftomd — PDF → Markdown (wraps the assembly-app pdf2md CLI, pdf.js)
   * convert_mdtopdf — Markdown → PDF (WeasyPrint)
   * upload_issue / issue_draft — files → a draft issue on a project's Documents tab, then issue it
@@ -900,8 +903,229 @@ def edit_selections(
         return _run_upload_cli("upload-product.ts", ["--as", who, "--edit-selections", str(path), *args], _uploader_env(who))
 
 
+# ── The app API (assembly-api.mjs on P:) ─────────────────────────────────────────────────────────
+# One no-dependency node CLI published from the app repo to P:/assembly-app-skills/api (with its guide).
+# These tools put it in front of Claude as real tools, so a session never has to know a file path.
+
+def _api_dir() -> Path:
+    env = os.environ.get("ASSEMBLY_API_DIR")
+    if env:
+        return Path(env)
+    here = Path(__file__).resolve()
+    for cand in (Path("P:/assembly-app-skills/api"), here.parents[4] / "assembly-app-skills" / "api"):
+        if (cand / "assembly-api.mjs").exists():
+            return cand
+    return Path("P:/assembly-app-skills/api")
+
+
+def _run_api(args: list[str], who: str | None, timeout: int = 1800) -> dict:
+    """Run assembly-api.mjs as the saved person. Exit 0 ok · 2 dry run / refused (the plan or the
+    reason is returned, not raised) · 3 PATCH/DELETE changed 0 rows · 1 error (raised)."""
+    script = _api_dir() / "assembly-api.mjs"
+    if not script.exists():
+        raise RuntimeError(f"the app API helper isn't at {script} — is the P: drive connected?")
+    node = shutil.which("node")
+    if not node:
+        raise RuntimeError("node isn't installed on this computer (needed for the app API) — re-run P:\\assembly-app-skills\\Install.bat")
+    env = {**os.environ, "ASSEMBLY_API_NO_WINDOW": "1"}
+    env_args = ["--env", args[args.index("--env") + 1]] if "--env" in args else []
+    if who:
+        pre = subprocess.run([node, str(script), "login", "--email", who, *env_args], env=env, capture_output=True,
+                             text=True, timeout=120, encoding="utf-8", errors="replace")
+        if pre.returncode != 0:
+            raise RuntimeError(
+                f"not signed in as {who} on this computer — ask the person for their app email and password "
+                f"and call save_login (once per computer), then try again. ({(pre.stderr or pre.stdout).strip()[:200]})")
+    else:
+        raise RuntimeError("nobody is signed in on this computer — ask the person for their app email and password "
+                           "and call save_login (once per computer; it's saved), then try again.")
+    proc = subprocess.run([node, str(script), *args], env=env, capture_output=True, text=True, timeout=timeout,
+                          encoding="utf-8", errors="replace")
+    out = proc.stdout.strip()
+    try:
+        body = json.loads(out) if out else None
+    except ValueError:
+        body = out
+    msgs = proc.stderr.strip()
+    if proc.returncode == 1 or (proc.returncode == 2 and body is None):
+        raise RuntimeError(msgs.removeprefix("assembly-api: ") or f"failed: {out[:500]}")
+    return {"ok": proc.returncode == 0, "exit": proc.returncode, "result": body, "messages": msgs}
+
+
+def _who(uploader_email: str | None) -> str | None:
+    try:
+        return _resolve_uploader(uploader_email)
+    except RuntimeError:
+        return None
+
+
+def _expand_files(files: list[str]) -> list[str]:
+    out: list[str] = []
+    for f in files:
+        p = Path(f).expanduser().resolve()
+        if p.is_dir():
+            out += [str(x) for x in sorted(p.rglob("*"))
+                    if x.is_file() and not x.name.startswith((".", "~$")) and x.name != "Thumbs.db"]
+        else:
+            out.append(str(p))
+    return out
+
+
+@mcp.tool()
+def upload_documents(
+    project: str,
+    files: list[str],
+    issue_name: str | None = None,
+    add_to_draft_id: str | None = None,
+    confirm: bool = False,
+    env: str = "prod",
+    uploader_email: str | None = None,
+) -> dict:
+    """Upload documents — drawings, PDFs, reports, specs, any files or whole folders — to an
+    assembly-app project. In the app, files live on the project's Documents ("Issued") tab inside an
+    issue: this puts them in a DRAFT issue (nobody is notified; issuing is a separate step,
+    `issue_draft`). Signs in as the person — if nobody is saved on this computer, ask for their app
+    email + password and call `save_login` first.
+
+    On prod, confirm=False is a dry run returning the plan (project, draft name, files): show it and
+    call again with confirm=True once they say yes. If the request already said exactly this ("upload
+    these to 2610 as Developed design"), confirm=True straight away is fine.
+
+    Args:
+        project: Project number (e.g. "2610"), name, or id.
+        files: File and/or folder paths (folders are walked).
+        issue_name: Name for the new draft issue (default "Upload <date>").
+        add_to_draft_id: Add to this existing DRAFT instead (also resumes a cut-off upload — files
+            already on it are skipped).
+        confirm: False = dry run on prod; True = do it.
+        env: "prod" (app.assembly.nz, default) or "dev" (dev.assembly.nz).
+        uploader_email: Who is uploading — omit for the saved default.
+
+    Returns:
+        {ok, exit, result, messages}: result = the dry-run plan, or {project, draft_issue, draft_id,
+        files, open: link to the page}.
+    """
+    paths = _expand_files(files)
+    if not paths:
+        raise ValueError("no files to upload")
+    args = ["upload-docs", project, *paths, *_env_arg(env)]
+    if issue_name:
+        args += ["--name", issue_name]
+    if add_to_draft_id:
+        args += ["--draft", add_to_draft_id]
+    if confirm:
+        args.append("--yes")
+    return _run_api(args, _who(uploader_email))
+
+
+@mcp.tool()
+def assembly_app(
+    method: str,
+    path: str,
+    data: dict | list | None = None,
+    confirm: bool = False,
+    env: str = "prod",
+    uploader_email: str | None = None,
+) -> dict:
+    """Read or change ANYTHING in the assembly-app — projects, documents/issues, selections, products,
+    contracts & questions, timesheets, team, sites, notifications — as the signed-in person (row-level
+    security: they can do exactly what they could in the app). Call `assembly_app_guide` first for the
+    tables, the ready-made calls for common tasks, and the rules.
+
+    Args:
+        method: "GET" (read), "POST" (insert), "PATCH" (update — needs a filter like ?id=eq.<uuid>),
+            "DELETE" (needs a filter), or "RPC" (call a database function; `path` = its name).
+        path: A PostgREST path, e.g. "rest/v1/projects?select=id,name&deleted_at=is.null&limit=20";
+            for RPC just the function name, e.g. "get_project_team".
+        data: JSON body for POST / PATCH / RPC.
+        confirm: Writes on prod need confirm=True — only once the person OK'd that change (a plain,
+            specific request for exactly it counts; see the guide).
+        env: "prod" (default) or "dev".
+        uploader_email: Who to act as — omit for the saved default.
+
+    Returns:
+        {ok, exit, result (rows / function result), messages (HTTP status, row counts)}. exit 2 = a prod
+        write without confirm (nothing changed); exit 3 = an update/delete changed 0 rows.
+    """
+    m = method.strip().upper()
+    if m not in ("GET", "POST", "PATCH", "DELETE", "RPC"):
+        raise ValueError("method must be GET, POST, PATCH, DELETE or RPC")
+    args = ["rpc", path.strip()] if m == "RPC" else [m.lower(), path.strip()]
+    args += _env_arg(env)
+    if confirm:
+        args.append("--yes")
+    if m == "GET":
+        args.append("--count")
+    with tempfile.TemporaryDirectory(prefix="assembly-app-") as tmp:
+        if data is not None:
+            body = Path(tmp) / "body.json"
+            body.write_text(json.dumps(data), encoding="utf-8")
+            args += ["--data", f"@{body}"]
+        return _run_api(args, _who(uploader_email), timeout=300)
+
+
+@mcp.tool()
+def assembly_app_guide(topic: str | None = None) -> str:
+    """The assembly-app API guide: how access works, the rules, and ready-made calls for the common
+    tasks (find a project, documents/issues, images, products, selections, contracts, time, docs).
+    Read it before using `assembly_app`.
+
+    Args:
+        topic: Omit for the guide. Or a table / function name (e.g. "project_products",
+            "issue_collection") for its columns or arguments and who can use it; "storage" for buckets.
+    """
+    d = _api_dir()
+    if not topic:
+        return (d / "README.md").read_text(encoding="utf-8")
+    want = topic.strip().lower()
+    if want in ("storage", "buckets", "edge", "edge functions"):
+        return (d / "reference" / "storage-and-edge.md").read_text(encoding="utf-8")
+    for name in ("tables.md", "functions.md"):
+        text = (d / "reference" / name).read_text(encoding="utf-8")
+        start = text.find(f"\n## {want}\n")
+        if start >= 0:
+            end = text.find("\n## ", start + 4)
+            return text[start + 1: end if end > 0 else None]
+    hits = [line[3:] for name in ("tables.md", "functions.md")
+            for line in (d / "reference" / name).read_text(encoding="utf-8").splitlines()
+            if line.startswith("## ") and want in line.lower()]
+    return f'No "{topic}" exactly. Close matches: {", ".join(hits[:40])}' if hits else f'Nothing called "{topic}".'
+
+
+def _report_status() -> None:
+    """On start-up, write this computer's state to P:/assembly-app-skills/status/, so a maintainer can
+    see every PC (tools, saved login, helper reachable) without asking anyone. Never fails the server."""
+    try:
+        status_dir = Path(os.environ.get("ASSEMBLY_STATUS_DIR", "P:/assembly-app-skills/status"))
+        if not status_dir.parent.exists():
+            return
+        status_dir.mkdir(exist_ok=True)
+        creds = _read_credentials()
+        default = creds.get(_DEFAULT_KEY)
+        api = _api_dir() / "assembly-api.mjs"
+        from datetime import datetime
+
+        info = {
+            "computer": os.environ.get("COMPUTERNAME", ""),
+            "windows_user": os.environ.get("USERNAME", ""),
+            "started": datetime.now().isoformat(timespec="seconds"),
+            "mcp_dir": str(Path(__file__).resolve().parents[2]),
+            "tools": sorted(t.name for t in mcp._tool_manager.list_tools()),
+            "saved_login": default if isinstance(default, str) else None,
+            "saved_people": [k for k, v in creds.items() if k != _DEFAULT_KEY and isinstance(v, str) and v],
+            "api_helper": str(api) if api.exists() else f"MISSING ({api})",
+            "node": shutil.which("node") or "MISSING",
+            "prod_key_set": bool(os.environ.get("ASSEMBLY_SUPABASE_ANON_KEY")),
+        }
+        name = f"{info['computer'] or 'unknown'}__{info['windows_user'] or 'unknown'}.json"
+        (status_dir / name).write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
+    except Exception:  # noqa: BLE001 — status is best-effort
+        pass
+
+
 def main() -> None:
     """Console-script entry point: run the MCP server over stdio."""
+    _report_status()
     mcp.run()
 
 
